@@ -123,7 +123,8 @@ while read -r pkg_name; do
 	# leak onto the next one
 	(
 		unset SBOM_PLUGIN SBOM_SCOPE SBOM_EXCLUDE_REASON SBOM_NAME \
-			SBOM_VERSION SBOM_LICENSE SBOM_SUPPLIER SBOM_CPE SBOM_PURL
+			SBOM_VERSION SBOM_LICENSE SBOM_SUPPLIER SBOM_CPE SBOM_PURL \
+			SBOM_SOURCE
 		bb_load_package "${pkg_name}" > /dev/null
 		sbom_collect_package "${pkg_name}"
 	) >> "${components_file}"

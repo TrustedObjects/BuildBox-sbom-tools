@@ -135,7 +135,18 @@ function sbom_collect_package {
 	# The licence is passed on as it is: the writers know how to carry a name
 	# which is not an SPDX expression without losing it
 	local licence="${SBOM_LICENSE}"
-	local purl="${SBOM_PURL:-$(sbom_purl "${name}" "${version}" "${SRC_URI}" "${commit}")}"
+	# SBOM_SOURCE replaces SRC_URI in the document, for a package whose source
+	# server has no place in it: an internal one, typically. The purl then
+	# carries no vcs_url qualifier, because a URL which is not the repository
+	# must not be presented as one; the exact revision is reported all the
+	# same, in its own field.
+	local source_uri="${SRC_URI}"
+	local purl_uri="${SRC_URI}"
+	if [ -n "${SBOM_SOURCE}" ]; then
+		source_uri="${SBOM_SOURCE}"
+		purl_uri=""
+	fi
+	local purl="${SBOM_PURL:-$(sbom_purl "${name}" "${version}" "${purl_uri}" "${commit}")}"
 
 	# The package itself, always reported: even when it expands into many
 	# components, what BuildBox pinned is part of the record
@@ -146,7 +157,7 @@ function sbom_collect_package {
 		supplier "${SBOM_SUPPLIER}" \
 		purl "${purl}" \
 		cpe "${SBOM_CPE}" \
-		source "${SRC_URI}" \
+		source "${source_uri}" \
 		revision "${commit}" \
 		scope "${scope}" \
 		type "${SBOM_TYPE}" \

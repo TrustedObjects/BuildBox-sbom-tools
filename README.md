@@ -79,6 +79,7 @@ exact revision.
 | `SBOM_SUPPLIER` | who publishes the component |
 | `SBOM_CPE` | CPE 2.3 identifier, for vulnerability matching |
 | `SBOM_PURL` | package URL, when the one built from the Git origin is not right |
+| `SBOM_SOURCE` | source URL to publish instead of `SRC_URI`, see [Sources which must not be published](#sources-which-must-not-be-published) |
 | `SBOM_TYPE` | component type: `library` (default), `application`, `firmware`, `operating-system`, `device` |
 
 > **Attention:** a package file is sourced by the shell, so **a value holding
@@ -105,6 +106,26 @@ nothing is passed off as an SPDX expression.
 | an expression, `MIT`, `GPL-2.0-only OR MIT` | `licenseDeclared` | `licenses[].expression` |
 | free text, `Apache Software License` | `NOASSERTION` plus `licenseComments` | `licenses[].license.name` |
 | none | `NOASSERTION` | absent |
+
+### Sources which must not be published
+
+`SRC_URI` is what BuildBox clones from, and it is reported as the download
+location of the component. On an internal Git or HTTP server, that address has
+no place in a document meant to leave the company. `SBOM_SOURCE` replaces it:
+
+```bash
+SBOM_SOURCE=https://example.com/
+```
+
+The component is then reported with that URL as its source, and its purl is
+built **without** the `vcs_url` qualifier, because a URL which is not the
+repository must not be presented as one. Nothing else changes: the exact
+revision is still reported, in the component `revision` field, in the SPDX
+`sourceInfo` and in the CycloneDX component, so the build stays traceable
+internally from the same document.
+
+It is a per-package field on purpose, and it is worth checking when a package
+is added to a target: the tool cannot tell an internal host from a public one.
 
 ### Scopes
 
