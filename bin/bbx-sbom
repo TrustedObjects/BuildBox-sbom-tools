@@ -1,0 +1,156 @@
+#!/bin/bash
+# BuildBox SBOM tools - entry point
+# Copyright (C) 2026 Trusted Objects
+
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# version 2, as published by the Free Software Foundation.
+
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, see
+# <https://www.gnu.org/licenses/>.
+
+# Generate the SBOM of the current BuildBox target, in SPDX and CycloneDX.
+# Meant to be called from a target dist script, once the target is built: what
+# a package really contains is only known after the build.
+
+set -e
+
+TOOL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." > /dev/null 2>&1 && pwd)"
+SBOM_PLUGINS_DIR="${TOOL_DIR}/plugins"
+export SBOM_PLUGINS_DIR
+
+source buildbox_utils.sh
+
+source "${TOOL_DIR}/lib/_common.sh"
+source "${TOOL_DIR}/lib/collect.sh"
+source "${TOOL_DIR}/lib/write_spdx.sh"
+source "${TOOL_DIR}/lib/write_cyclonedx.sh"
+
+function help {
+	echo "Usage: bbx-sbom [OPTIONS]"
+	echo ""
+	echo "Generate the SBOM of the current target, in SPDX and CycloneDX."
+	echo "To be called once the target is built, typically from its dist script."
+	echo ""
+	echo "  -o, --output DIR   Where to write the documents"
+	echo "                     (default: \$BB_TARGET_DIR/sbom)"
+	echo "  --name NAME        Product name (default: the project name)"
+	echo "  --product-version V"
+	echo "                     Product version (default: the profile revision)"
+	echo "  --format FORMAT    'spdx', 'cyclonedx' or 'both' (default: both)"
+	echo "  -h, --help         This help"
+}
+
+output_dir=""
+product=""
+product_version=""
+format="both"
+while [ -n "${1}" ]; do
+	case "${1}" in
+		-o|--output)
+			shift
+			output_dir="${1}"
+			;;
+		--name)
+			shift
+			product="${1}"
+			;;
+		--product-version)
+			shift
+			product_version="${1}"
+			;;
+		--format)
+			shift
+			format="${1}"
+			;;
+		-h|--help)
+			help
+			exit 0
+			;;
+		*)
+			sbom_error "unknown option ${1}"
+			exit 1
+			;;
+	esac
+	shift
+done
+
+case "${format}" in
+	spdx|cyclonedx|both) ;;
+	*)
+		sbom_error "unknown format '${format}', expected spdx, cyclonedx or both"
+		exit 1
+		;;
+esac
+
+if [ -z "${BB_PROJECT_DIR}" ] || [ ! -d "${BB_PROJECT_DIR}" ]; then
+	sbom_error "not in a BuildBox project directory"
+	exit 1
+fi
+if [ -z "${BB_TARGET}" ]; then
+	sbom_error "no current target, set one with 'bbx target set <name>'"
+	exit 1
+fi
+
+output_dir="${output_dir:-${BB_TARGET_DIR}/sbom}"
+product="${product:-${BB_PROJECT}}"
+if [ -z "${product_version}" ]; then
+	# The profile is what defines the delivery, so its revision versions it
+	product_version=$(git -C "${BB_PROJECT_PROFILE_DIR}" describe --tags --always --dirty 2> /dev/null || true)
+fi
+tool_version=$(git -C "${TOOL_DIR}" describe --tags --always 2> /dev/null || echo "unknown")
+
+mkdir -p "${output_dir}"
+components_file="${output_dir}/components.jsonl"
+SBOM_EXCLUSIONS_FILE="${output_dir}/exclusions.jsonl"
+export SBOM_EXCLUSIONS_FILE
+: > "${components_file}"
+: > "${SBOM_EXCLUSIONS_FILE}"
+
+sbom_log "Collecting \e[1m${BB_TARGET}\e[0m components..."
+while read -r pkg_name; do
+	if [ -z "${pkg_name}" ]; then
+		continue
+	fi
+	sbom_log "\t${pkg_name}"
+	# Package fields are read in a subshell: SBOM_* of one package must not
+	# leak onto the next one
+	(
+		unset SBOM_PLUGIN SBOM_SCOPE SBOM_EXCLUDE_REASON SBOM_NAME \
+			SBOM_VERSION SBOM_LICENSE SBOM_SUPPLIER SBOM_CPE SBOM_PURL
+		bb_load_package "${pkg_name}" > /dev/null
+		sbom_collect_package "${pkg_name}"
+	) >> "${components_file}"
+done < <(bb_get_packages "${BB_TARGET}")
+
+merged_file="${output_dir}/components.merged.jsonl"
+sbom_merge < "${components_file}" > "${merged_file}"
+mv "${merged_file}" "${components_file}"
+
+component_count=$(wc -l < "${components_file}" | tr -d ' ')
+excluded_count=$(wc -l < "${SBOM_EXCLUSIONS_FILE}" | tr -d ' ')
+unknown_licence_count=$(jq -r 'select((.license // "") == "") | .name' < "${components_file}" | wc -l | tr -d ' ')
+
+doc_name="${product}-${BB_TARGET}"
+if [ "${format}" = "spdx" ] || [ "${format}" = "both" ]; then
+	sbom_write_spdx "${doc_name}" "${product}" "${product_version}" "${tool_version}" \
+		< "${components_file}" > "${output_dir}/${doc_name}.spdx.json"
+	sbom_log "SPDX:      ${output_dir}/${doc_name}.spdx.json"
+fi
+if [ "${format}" = "cyclonedx" ] || [ "${format}" = "both" ]; then
+	sbom_write_cyclonedx "${product}" "${product_version}" "${tool_version}" \
+		< "${components_file}" > "${output_dir}/${doc_name}.cdx.json"
+	sbom_log "CycloneDX: ${output_dir}/${doc_name}.cdx.json"
+fi
+
+sbom_log "${component_count} component(s), ${excluded_count} excluded"
+# An unknown licence is a hole in the compliance record, it has to be visible
+if [ "${unknown_licence_count}" -ne 0 ]; then
+	sbom_warn "${unknown_licence_count} component(s) without a licence, reported as NOASSERTION"
+fi
