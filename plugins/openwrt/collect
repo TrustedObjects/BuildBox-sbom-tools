@@ -1,0 +1,124 @@
+#!/bin/bash
+# BuildBox SBOM tools - OpenWrt collector
+# Copyright (C) 2026 Trusted Objects
+
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# version 2, as published by the Free Software Foundation.
+
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, see
+# <https://www.gnu.org/licenses/>.
+
+# List the components of an OpenWrt firmware.
+#
+# OpenWrt knows its own content far better than we ever could: with
+# CONFIG_JSON_CYCLONEDX_SBOM set it writes a CycloneDX document next to the
+# image, cross referencing the image manifest with tmp/.packageinfo, and it
+# already handles what is easy to get wrong, the kernel and the ABI suffixed
+# package names (libfoo1 for libfoo). So this collector reads that document
+# instead of parsing the build tree, and follows OpenWrt upstream for free.
+#
+# The '.config' is deliberately not read: it says what was selected, including
+# host tools and build dependencies which are not shipped, while the manifest
+# and the SBOM say what really ended up in the firmware. For a compliance
+# document, only the latter is defensible.
+#
+# Without that OpenWrt SBOM, the image manifest alone still gives names and
+# versions, so a degraded list is produced rather than nothing, and the missing
+# licences are announced.
+
+set -e
+
+tree="${SBOM_PACKAGE_SRC_DIR}"
+if [ -z "${tree}" ] || [ ! -d "${tree}" ]; then
+	>&2 echo "openwrt: no sources directory for '${SBOM_PACKAGE}'"
+	exit 1
+fi
+if [ ! -d "${tree}/bin/targets" ]; then
+	>&2 echo "openwrt: '${tree}/bin/targets' is missing, the firmware is not built"
+	exit 1
+fi
+
+# Turn OpenWrt CycloneDX components into component lines. Several licences on
+# one package are joined with AND: for compliance, having to satisfy them all
+# is the safe reading.
+function from_openwrt_sbom {
+	jq -c '
+		.components // [] | .[] |
+		{
+			name: .name,
+			version: (.version // ""),
+			license: (
+				[ (.licenses // [])[] | (.license.id // .license.name // .expression // "") ]
+				| map(select(. != "")) | unique | join(" AND ")
+			),
+			cpe: (.cpe // ""),
+			type: (.type // "library"),
+			purl: (
+				if (.name // "") == "" then ""
+				else "pkg:generic/" + .name
+					+ (if (.version // "") == "" then "" else "@" + .version end)
+					+ "?distro=openwrt"
+				end
+			),
+			scope: "shipped",
+			origin: "openwrt"
+		}
+		| with_entries(select(.value != ""))
+	' "${1}"
+}
+
+# The manifest holds one 'name - version' line per installed package. No
+# licence is available there, which is exactly why the OpenWrt SBOM is better.
+function from_manifest {
+	sed -n 's/^\([^ ][^ ]*\) - \(.*\)$/\1\t\2/p' "${1}" \
+		| while IFS=$'\t' read -r name version; do
+			if [ -z "${name}" ]; then
+				continue
+			fi
+			jq -c -n --arg n "${name}" --arg v "${version}" '{
+				name: $n,
+				version: $v,
+				purl: ("pkg:generic/" + $n + (if $v == "" then "" else "@" + $v end) + "?distro=openwrt"),
+				scope: "shipped",
+				origin: "openwrt"
+			}'
+		done
+}
+
+found=0
+while read -r sbom; do
+	if [ -z "${sbom}" ]; then
+		continue
+	fi
+	from_openwrt_sbom "${sbom}"
+	found=1
+done < <(find "${tree}/bin/targets" -maxdepth 3 -type f -name '*.bom.cdx.json' | sort)
+
+if [ ${found} -eq 1 ]; then
+	exit 0
+fi
+
+>&2 echo "openwrt: no CycloneDX SBOM found under ${tree}/bin/targets"
+>&2 echo "         set CONFIG_JSON_CYCLONEDX_SBOM in the OpenWrt configuration"
+>&2 echo "         to get licences and CPE identifiers"
+
+while read -r manifest; do
+	if [ -z "${manifest}" ]; then
+		continue
+	fi
+	from_manifest "${manifest}"
+	found=1
+done < <(find "${tree}/bin/targets" -maxdepth 3 -type f -name '*.manifest' | sort)
+
+if [ ${found} -eq 0 ]; then
+	>&2 echo "openwrt: no image manifest either, nothing to report"
+	exit 1
+fi
+>&2 echo "openwrt: fell back to the image manifest, licences are missing"

@@ -132,10 +132,9 @@ function sbom_collect_package {
 	local version="${SBOM_VERSION:-$(sbom_package_version "${pkg_name}" "${src_dir}")}"
 	local commit
 	commit=$(sbom_package_commit "${src_dir}")
+	# The licence is passed on as it is: the writers know how to carry a name
+	# which is not an SPDX expression without losing it
 	local licence="${SBOM_LICENSE}"
-	if ! sbom_is_spdx_licence "${licence}"; then
-		licence=""
-	fi
 	local purl="${SBOM_PURL:-$(sbom_purl "${name}" "${version}" "${SRC_URI}" "${commit}")}"
 
 	# The package itself, always reported: even when it expands into many
@@ -150,16 +149,16 @@ function sbom_collect_package {
 		source "${SRC_URI}" \
 		revision "${commit}" \
 		scope "${scope}" \
+		type "${SBOM_TYPE}" \
 		origin buildbox \
 		buildbox_package "${pkg_name}"
 
 	# Then whatever it contains
 	local collector="${src_dir}/.bbx-sbom/collect"
 	if [ -n "${src_dir}" ] && [ -x "${collector}" ]; then
-		sbom_log "\t\t${pkg_name}: sources collector" >&2
-		( cd "${src_dir}" && "${collector}" ) \
-			| sbom_tag_children "${pkg_name}" "pkg-script"
-		return 0
+		sbom_run_collector "${pkg_name}" "pkg-script" "${src_dir}" \
+			"${collector}"
+		return $?
 	fi
 	if [ -n "${SBOM_PLUGIN}" ]; then
 		local plugin="${SBOM_PLUGINS_DIR}/${SBOM_PLUGIN}/collect"
@@ -167,10 +166,47 @@ function sbom_collect_package {
 			sbom_warn "package '${pkg_name}' asks for the unknown SBOM plugin '${SBOM_PLUGIN}'"
 			return 0
 		fi
-		sbom_log "\t\t${pkg_name}: ${SBOM_PLUGIN} plugin" >&2
 		SBOM_PACKAGE="${pkg_name}" SBOM_PACKAGE_SRC_DIR="${src_dir}" \
-			"${plugin}" | sbom_tag_children "${pkg_name}" "${SBOM_PLUGIN}"
+			sbom_run_collector "${pkg_name}" "${SBOM_PLUGIN}" "${src_dir}" \
+				"${plugin}"
+		return $?
 	fi
+	return 0
+}
+
+## Run a collector and take in its components.
+## The output is collected before being emitted, so that a collector failing
+## is seen: in a pipeline its exit code would be hidden by the next stage, and
+## a silently empty expansion is the worst outcome for a compliance document.
+## @param Package name
+## @param Collector name, for the origin field
+## @param Working directory
+## @param Collector path
+## @print Component lines
+## @return 0 on success, 1 when the collector failed
+function sbom_run_collector {
+	local pkg_name="${1}"
+	local origin="${2}"
+	local work_dir="${3}"
+	local collector="${4}"
+	sbom_log "\t  ${origin} collector" >&2
+	local out
+	out=$(mktemp)
+	local ret=0
+	( cd "${work_dir}" > /dev/null 2>&1 || cd .; "${collector}" ) > "${out}" || ret=$?
+	if [ ${ret} -ne 0 ]; then
+		sbom_warn "the ${origin} collector of '${pkg_name}' failed (exit ${ret}), its content is missing from the SBOM"
+		rm -f "${out}"
+		return 1
+	fi
+	# A collector writing nothing is worth saying: it may be a silent failure
+	if [ ! -s "${out}" ]; then
+		sbom_warn "the ${origin} collector of '${pkg_name}' found no component"
+	else
+		sbom_tag_children "${pkg_name}" "${origin}" < "${out}"
+	fi
+	rm -f "${out}"
+	return 0
 }
 
 ## Complete the lines a collector produced with what it cannot know: which

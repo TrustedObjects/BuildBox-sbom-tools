@@ -39,7 +39,8 @@ function sbom_write_cyclonedx {
 		--arg tool_name "${SBOM_TOOL_NAME}" \
 		--arg tool_version "${tool_version}" \
 		--arg created "${created}" \
-		--arg serial "${serial}" '
+		--arg serial "${serial}" \
+		"${SBOM_JQ_LICENCE_HELPERS}"'
 		def ref($c; $i):
 			if ($c.purl // "") != "" then $c.purl
 			else "component-" + ($i + 1 | tostring) end;
@@ -68,7 +69,7 @@ function sbom_write_cyclonedx {
 				}
 			},
 			components: [ $components | to_entries[] | .key as $i | .value as $c | {
-				type: "library",
+				type: ($c.type // "library"),
 				"bom-ref": ref($c; $i),
 				name: $c.name,
 				version: (if ($c.version // "") == "" then "unknown" else $c.version end),
@@ -77,9 +78,13 @@ function sbom_write_cyclonedx {
 			+ (if ($c.purl // "") == "" then {} else { purl: $c.purl } end)
 			+ (if ($c.cpe // "") == "" then {} else { cpe: $c.cpe } end)
 			+ (if ($c.supplier // "") == "" then {} else { supplier: { name: $c.supplier } } end)
-			+ (if ($c.license // "") == "" then {} else {
+			+ (if ($c.license // "") == "" then {}
+			   elif is_spdx_expression($c.license) then {
 				licenses: [ { expression: $c.license } ]
-			} end)
+			   } else {
+				# CycloneDX takes a licence name, so free text survives
+				licenses: [ { license: { name: $c.license } } ]
+			   } end)
 			+ (if ($c.source // "") == "" then {} else {
 				externalReferences: [ { type: "vcs", url: $c.source } ]
 			} end)

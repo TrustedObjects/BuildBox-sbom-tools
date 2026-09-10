@@ -40,10 +40,12 @@ function sbom_write_spdx {
 		--arg product_version "${product_version}" \
 		--arg tool "${SBOM_TOOL_NAME} ${tool_version}" \
 		--arg created "${created}" \
-		--arg namespace "${namespace}" '
+		--arg namespace "${namespace}" \
+		"${SBOM_JQ_LICENCE_HELPERS}"'
 		# SPDX identifiers must be unique and stable inside the document
 		def spdxid($i): "SPDXRef-Package-" + ($i + 1 | tostring);
-		def licence($c): if ($c.license // "") == "" then "NOASSERTION" else $c.license end;
+		def licence($c):
+			if is_spdx_expression($c.license) then $c.license else "NOASSERTION" end;
 		def supplier($c):
 			if ($c.supplier // "") == "" then "NOASSERTION"
 			else "Organization: " + $c.supplier end;
@@ -94,6 +96,11 @@ function sbom_write_spdx {
 				+ (if ($c.revision // "") == "" then {} else {
 					sourceInfo: ("Built from revision " + $c.revision)
 				} end)
+				# Free text licence: kept as a comment, the field itself
+				# only ever holding a valid expression
+				+ (if (($c.license // "") != "") and (is_spdx_expression($c.license) | not)
+				   then { licenseComments: ("Declared licence, not an SPDX expression: " + $c.license) }
+				   else {} end)
 				+ (if ($c.scope // "shipped") == "build" then {
 					comment: "Build time component, not shipped in the product"
 				} else {} end)

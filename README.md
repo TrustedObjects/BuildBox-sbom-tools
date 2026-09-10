@@ -79,6 +79,7 @@ exact revision.
 | `SBOM_SUPPLIER` | who publishes the component |
 | `SBOM_CPE` | CPE 2.3 identifier, for vulnerability matching |
 | `SBOM_PURL` | package URL, when the one built from the Git origin is not right |
+| `SBOM_TYPE` | component type: `library` (default), `application`, `firmware`, `operating-system`, `device` |
 
 > **Attention:** a package file is sourced by the shell, so **a value holding
 > spaces must be quoted**: `SBOM_SUPPLIER="Upstream Corp"`.
@@ -88,6 +89,22 @@ A licence which is not a plain SPDX expression is reported as `NOASSERTION`
 rather than passed off as a licence: a wrong licence in a SBOM is worse than an
 admitted gap. The tool counts the components without a licence and says so at
 the end of the run.
+
+That check is a shape check, not a lookup: it rejects what cannot be an SPDX
+expression, and does not tell a real identifier from a plausible looking one,
+so `Proprietary-TO` goes through untouched. Checking against the SPDX licence
+list would mean shipping that list and keeping it current, which is not done
+here.
+
+Free text such as `Apache Software License`, which apt and pip hand out, is
+**not lost**: each format carries it its own way, so nothing is thrown away and
+nothing is passed off as an SPDX expression.
+
+| Licence | SPDX | CycloneDX |
+|---|---|---|
+| an expression, `MIT`, `GPL-2.0-only OR MIT` | `licenseDeclared` | `licenses[].expression` |
+| free text, `Apache Software License` | `NOASSERTION` plus `licenseComments` | `licenses[].license.name` |
+| none | `NOASSERTION` | absent |
 
 ### Scopes
 
@@ -135,6 +152,15 @@ environment set, and with the package sources as working directory for a
 | `source` | | where the code comes from |
 | `revision` | | exact revision, a commit for instance |
 | `scope` | | `shipped` (default) or `build` |
+| `type` | | `library` (default), `application`, `firmware`, `operating-system`, `device` |
+
+Any other field is kept as it is in `components.jsonl`, unused by the documents
+but part of the audit trail: a collector can record there where each component
+was found, in which container image for instance.
+
+A collector which fails, or which finds nothing, is reported: its output is
+read before being taken in, so that its exit code is not swallowed. A silently
+empty expansion is the worst outcome for a compliance document.
 
 The tool fills in what a collector leaves out: which BuildBox package the
 component came from, and which collector found it. Components are merged on
@@ -146,6 +172,22 @@ This line oriented format is deliberately not SPDX nor CycloneDX: collectors
 are shell scripts, and SBOM specifications keep moving. Writing the documents
 is the tool's job, and only the tool has to follow the specifications.
 
+### Writing a collector
+
+Three things learnt the hard way, worth knowing before writing one:
+
+- **Do not redo heavy work.** When the data already comes from an extraction
+  step of its own, read what that step produced instead of running it again.
+  The SBOM and the other deliverables then always describe the same thing, and
+  the collector fails with a clear message when the step has not run.
+- **Emit a simple text format where `jq` is missing.** A collector gathering
+  its data inside a virtual machine or a container may not have `jq` there.
+  Write tab separated lines, and convert them in the collector, on the BuildBox
+  side, where `jq` is available.
+- **Parse tab separated lines with `jq`, not with `read`.** A tab is IFS
+  whitespace, so the shell collapses consecutive tabs: one empty field shifts
+  every following one, silently.
+
 ### Plugins
 
 A plugin is `plugins/<name>/collect` in this repository, an executable
@@ -156,7 +198,40 @@ following the collector contract. It is given:
 | `SBOM_PACKAGE` | the BuildBox package name |
 | `SBOM_PACKAGE_SRC_DIR` | its sources directory in the target |
 
-No plugin is provided yet.
+#### `openwrt`
+
+Lists the components of an OpenWrt firmware. Declare it in the package file of
+your OpenWrt sources:
+
+```bash
+SBOM_PLUGIN=openwrt
+```
+
+> **This collector requires `CONFIG_JSON_CYCLONEDX_SBOM=y` in the OpenWrt
+> configuration of the firmware.** It is off by default in OpenWrt, unless
+> building as a buildbot. Add it to the configuration your build applies, the
+> `config-*` file the build script copies over `.config`, not to `.config`
+> itself, which the build overwrites.
+
+OpenWrt knows its own content far better than any parsing of the build tree
+would: with that option set, it writes a CycloneDX document next to the image,
+cross referencing the image manifest with `tmp/.packageinfo`, and it already
+handles what is easy to get wrong, the kernel and the ABI suffixed package
+names (`libfoo1` for `libfoo`). The plugin reads that document, so it follows
+OpenWrt upstream for free.
+
+Without the option, the plugin does not fail: it falls back to the image
+manifest, which gives names and versions but **no licence and no CPE**, and it
+says so on every run. A SBOM without licences does not answer a CRA
+requirement, so treat that fallback as a warning to act on, not as a mode of
+operation.
+
+The `.config` is deliberately not read. It says what was *selected*, host tools
+and build dependencies included, while the manifest says what really ended up
+in the firmware. Only the latter is defensible in a compliance document.
+
+Several licences on one package are joined with `AND`: for compliance, having
+to satisfy them all is the safe reading of an ambiguous `PKG_LICENSE`.
 
 ## Not in scope: vulnerabilities
 
