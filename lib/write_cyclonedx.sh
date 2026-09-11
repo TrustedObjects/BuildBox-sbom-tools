@@ -23,12 +23,14 @@
 ## @param Product name
 ## @param Product version
 ## @param Tool version
+## @param Product type, a CycloneDX classification: 'firmware' by default
 ## @stdin Component lines
 ## @print CycloneDX 1.6 JSON document
 function sbom_write_cyclonedx {
 	local product="${1}"
 	local product_version="${2}"
 	local tool_version="${3}"
+	local product_type="${4:-firmware}"
 	local created
 	created=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 	local serial="urn:uuid:$(uuidgen)"
@@ -40,6 +42,7 @@ function sbom_write_cyclonedx {
 		--arg tool_version "${tool_version}" \
 		--arg created "${created}" \
 		--arg serial "${serial}" \
+		--arg product_type "${product_type}" \
 		"${SBOM_JQ_LICENCE_HELPERS}"'
 		def ref($c; $i):
 			if ($c.purl // "") != "" then $c.purl
@@ -61,7 +64,7 @@ function sbom_write_cyclonedx {
 					} ]
 				},
 				component: {
-					type: "firmware",
+					type: $product_type,
 					"bom-ref": "product",
 					name: $product,
 					version: (if $product_version == "" then "unknown" else $product_version end),

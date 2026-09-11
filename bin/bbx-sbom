@@ -43,6 +43,10 @@ function help {
 	echo "  --name NAME        Product name (default: the project name)"
 	echo "  --product-version V"
 	echo "                     Product version (default: the profile revision)"
+	echo "  --product-type T   What the product is, as a CycloneDX"
+	echo "                     classification: application, firmware, library,"
+	echo "                     container, device, operating-system, platform,"
+	echo "                     framework, file, data (default: firmware)"
 	echo "  --format FORMAT    'spdx', 'cyclonedx' or 'both' (default: both)"
 	echo "  -h, --help         This help"
 }
@@ -50,6 +54,9 @@ function help {
 output_dir=""
 product=""
 product_version=""
+# What the product is. CycloneDX says it in its metadata component, and this
+# tool was written for a firmware, which is why that is the default.
+product_type="firmware"
 format="both"
 while [ -n "${1}" ]; do
 	case "${1}" in
@@ -64,6 +71,10 @@ while [ -n "${1}" ]; do
 		--product-version)
 			shift
 			product_version="${1}"
+			;;
+		--product-type)
+			shift
+			product_type="${1}"
 			;;
 		--format)
 			shift
@@ -85,6 +96,18 @@ case "${format}" in
 	spdx|cyclonedx|both) ;;
 	*)
 		sbom_error "unknown format '${format}', expected spdx, cyclonedx or both"
+		exit 1
+		;;
+esac
+
+# The CycloneDX classification is a closed list: a value outside it makes the
+# document invalid, which is worth refusing here rather than at the reader.
+case "${product_type}" in
+	application|framework|library|container|platform|device-driver|device) ;;
+	firmware|file|machine-learning-model|data|cryptographic-asset) ;;
+	operating-system) ;;
+	*)
+		sbom_error "unknown product type '${product_type}', see --help"
 		exit 1
 		;;
 esac
@@ -145,7 +168,7 @@ if [ "${format}" = "spdx" ] || [ "${format}" = "both" ]; then
 	sbom_log "SPDX:      ${output_dir}/${doc_name}.spdx.json"
 fi
 if [ "${format}" = "cyclonedx" ] || [ "${format}" = "both" ]; then
-	sbom_write_cyclonedx "${product}" "${product_version}" "${tool_version}" \
+	sbom_write_cyclonedx "${product}" "${product_version}" "${tool_version}" "${product_type}" \
 		< "${components_file}" > "${output_dir}/${doc_name}.cdx.json"
 	sbom_log "CycloneDX: ${output_dir}/${doc_name}.cdx.json"
 fi

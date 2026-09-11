@@ -49,8 +49,17 @@ Usage: bbx-sbom [OPTIONS]
   -o, --output DIR      Where to write the documents (default: $BB_TARGET_DIR/sbom)
   --name NAME           Product name (default: the project name)
   --product-version V   Product version (default: the profile revision)
+  --product-type TYPE   What the product is, as a CycloneDX classification
+                        (default: firmware)
   --format FORMAT       'spdx', 'cyclonedx' or 'both' (default: both)
 ```
+
+`--product-type` is what CycloneDX puts in the metadata component, the one
+describing the delivery itself: `firmware` by default, because that is what
+this tool was written for, and `application` for an APK or a program. The value
+is checked against the CycloneDX list, since one outside it makes the document
+invalid. SPDX carries no such field, so the option changes the CycloneDX
+document only.
 
 Output, in `$BB_TARGET_DIR/sbom/` unless told otherwise:
 
