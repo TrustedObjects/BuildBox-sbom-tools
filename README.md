@@ -183,10 +183,18 @@ environment set, and with the package sources as working directory for a
 | `revision` | | exact revision, a commit for instance |
 | `scope` | | `shipped` (default) or `build` |
 | `type` | | `library` (default), `application`, `firmware`, `operating-system`, `device` |
+| `contexts` | | list of places the component was found in, container images for instance |
+
+`contexts` reaches the documents, as a SPDX annotation `Found in: a, b` and as
+one CycloneDX `bbx-sbom:found-in` property per entry. A component found in
+several places is **one** component carrying the list, never one per place:
+duplicating it would count its vulnerabilities as many times. Two images
+sharing a package is the normal case, and the ones which do not share it is
+what a reader is after, so a collector listing a single place per component
+describes only the first one it looked at.
 
 Any other field is kept as it is in `components.jsonl`, unused by the documents
-but part of the audit trail: a collector can record there where each component
-was found, in which container image for instance.
+but part of the audit trail.
 
 A collector which fails, or which finds nothing, is reported: its output is
 read before being taken in, so that its exit code is not swallowed. A silently

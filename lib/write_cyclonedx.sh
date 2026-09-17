@@ -94,6 +94,15 @@ function sbom_write_cyclonedx {
 			+ (if ($c.scope // "shipped") == "build" then {
 				description: "Build time component, not shipped in the product"
 			} else {} end)
+			# Where the component was found, one property per place: the
+			# images of a product do not hold the same packages even when
+			# built on the same distribution
+			+ (if (($c.contexts // []) | length) == 0 then {} else {
+				properties: [ $c.contexts[] | {
+					name: "bbx-sbom:found-in",
+					value: .
+				} ]
+			} end)
 			],
 			dependencies: [ {
 				ref: "product",

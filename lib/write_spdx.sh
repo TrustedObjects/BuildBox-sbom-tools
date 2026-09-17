@@ -104,6 +104,20 @@ function sbom_write_spdx {
 				+ (if ($c.scope // "shipped") == "build" then {
 					comment: "Build time component, not shipped in the product"
 				} else {} end)
+				# Where the component was found: the images of a product
+				# do not hold the same packages even when built on the
+				# same distribution, so a fix is planned per image and
+				# not per distribution. An annotation rather than a
+				# relationship: describing the images as packages of
+				# their own is a bigger claim than this document makes.
+				+ (if (($c.contexts // []) | length) == 0 then {} else {
+					annotations: [ {
+						annotator: ("Tool: " + $tool),
+						annotationDate: $created,
+						annotationType: "OTHER",
+						comment: ("Found in: " + ($c.contexts | join(", ")))
+					} ]
+				} end)
 				]
 			),
 			relationships: (
